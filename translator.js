@@ -26,6 +26,16 @@ const EDITABLE_MODEL_FIELDS = [
   "HEADERS",
 ];
 const SUPPORTED_PROVIDER_TYPES = ["ollama", "openai-compatible", "gemini"];
+const TARGET_LANGUAGES = {
+  EN: { code: "EN", label: "English", shortLabel: "EN" },
+  VI: { code: "VI", label: "Vietnamese", shortLabel: "VI" },
+  FR: { code: "FR", label: "French", shortLabel: "FR" },
+  DE: { code: "DE", label: "German", shortLabel: "DE" },
+  JA: { code: "JA", label: "Japanese", shortLabel: "JA" },
+  KO: { code: "KO", label: "Korean", shortLabel: "KO" },
+  ZH: { code: "ZH", label: "Chinese", shortLabel: "ZH" },
+};
+const DEFAULT_TARGET_LANGUAGE = "VI";
 
 function createModelStateHelpers({
   storageKey,
@@ -66,6 +76,34 @@ function createModelStateHelpers({
 
 function resolveActiveModel(models, activeModelKey, defaultModelKey) {
   return models[activeModelKey] || models[defaultModelKey];
+}
+
+function resolveTargetLanguage(targetLanguageCode) {
+  return (
+    TARGET_LANGUAGES[targetLanguageCode] ||
+    TARGET_LANGUAGES[DEFAULT_TARGET_LANGUAGE]
+  );
+}
+
+function getTargetLanguageToolbarLabel(targetLanguageCode) {
+  return resolveTargetLanguage(targetLanguageCode).shortLabel;
+}
+
+function buildTranslationMessages(selection, targetLanguageCode) {
+  const targetLanguage = resolveTargetLanguage(targetLanguageCode);
+
+  return [
+    {
+      role: "system",
+      content:
+        `You are a professional translator. Detect the source language automatically and translate into ${targetLanguage.label}. ` +
+        "Preserve specialized terminology when appropriate. Return only the translation.",
+    },
+    {
+      role: "user",
+      content: `Translate this passage into ${targetLanguage.label}:\n\n${selection}`,
+    },
+  ];
 }
 
 function formatModelOptionLabel(displayName, isActive) {
@@ -237,9 +275,12 @@ if (typeof module !== "undefined" && module.exports) {
     buildModelRegistry,
     createModelStateHelpers,
     formatModelOptionLabel,
+    buildTranslationMessages,
     getModelMenuLabels,
+    getTargetLanguageToolbarLabel,
     isValidCustomModelDefinition,
     isUniqueModelKey,
+    resolveTargetLanguage,
     resolveRegistryActiveModel,
     resolveActiveModel,
   };
@@ -339,27 +380,13 @@ if (
       translate: {
         icon: "🌐",
         loadingTitle: (model) => `🔄 Translating with ${model.DISPLAY_NAME}...`,
-        loadingMessage: "The model is automatically detecting the language...",
+        loadingMessage: () =>
+          `Translating into ${resolveTargetLanguage(currentTargetLanguage).label}...`,
         resultTitle: (model) =>
           `✅ Translation complete - ${model.DISPLAY_NAME}`,
         temperature: 0.3,
         buildMessages(selection) {
-          return [
-            {
-              role: "system",
-              content:
-                "You are a professional bidirectional English-Vietnamese translator. " +
-                "Automatically detect the language:\n" +
-                "- If the text is mostly English, translate it into natural, fluent Vietnamese.\n" +
-                "- If the text is mostly Vietnamese, translate it into natural English.\n" +
-                "- If the text is mixed, translate it smoothly while preserving specialized English terminology when appropriate.\n" +
-                "Return only the clean translation. Do not add explanations or any extra text.",
-            },
-            {
-              role: "user",
-              content: `Translate this passage naturally:\n\n${selection}`,
-            },
-          ];
+          return buildTranslationMessages(selection, currentTargetLanguage);
         },
       },
       grammar: {
@@ -402,9 +429,15 @@ if (
             box-shadow: 0 6px 16px rgba(0,0,0,0.25);
             padding: 4px;
             display: flex;
-            gap: 6px;
+            flex-direction: column;
+            gap: 4px;
             z-index: 2147483647;
             user-select: none;
+        }
+        .qwen-toolbar-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
         .qwen-small-btn {
             background: white;
@@ -422,6 +455,38 @@ if (
         }
         .qwen-small-btn:hover {
             transform: scale(1.15);
+        }
+        .qwen-target-trigger {
+            background: #f8fafc;
+            color: #334155;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            padding: 2px 6px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        .qwen-target-picker {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            padding-top: 2px;
+        }
+        .qwen-target-option {
+            border: 1px solid #cbd5e1;
+            background: white;
+            color: #334155;
+            border-radius: 6px;
+            padding: 3px 6px;
+            cursor: pointer;
+            font-size: 11px;
+            line-height: 1.2;
+        }
+        .qwen-target-option.active {
+            background: #dcfce7;
+            border-color: #22c55e;
+            color: #166534;
         }
         .qwen-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 520px; max-height: 80vh; background: #fff; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); z-index: 2147483647; font-family: system-ui, sans-serif; overflow: hidden; }
         .qwen-popup-header { background: #22c55e; color: white; padding: 14px 20px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
@@ -454,6 +519,8 @@ if (
 
     let toolbar = null;
     let currentSelection = "";
+    let currentTargetLanguage = DEFAULT_TARGET_LANGUAGE;
+    let languagePickerVisible = false;
 
     function removeToolbar() {
       if (!toolbar) return;
@@ -489,6 +556,43 @@ if (
         runSelectionAction(action);
       });
       return button;
+    }
+
+    function createTargetLanguageTrigger() {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "qwen-target-trigger";
+      button.textContent = getTargetLanguageToolbarLabel(currentTargetLanguage);
+      button.addEventListener("click", (event) => {
+        event.stopImmediatePropagation();
+        languagePickerVisible = !languagePickerVisible;
+        showToolbar();
+      });
+      return button;
+    }
+
+    function createTargetLanguagePicker() {
+      const picker = document.createElement("div");
+      picker.className = "qwen-target-picker";
+
+      Object.values(TARGET_LANGUAGES).forEach((language) => {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = `qwen-target-option${
+          language.code === currentTargetLanguage ? " active" : ""
+        }`;
+        option.textContent = language.shortLabel;
+        option.title = language.label;
+        option.addEventListener("click", (event) => {
+          event.stopImmediatePropagation();
+          currentTargetLanguage = language.code;
+          languagePickerVisible = false;
+          showToolbar();
+        });
+        picker.appendChild(option);
+      });
+
+      return picker;
     }
 
     function getProviderApiKeyHeader(providerType) {
@@ -750,9 +854,18 @@ if (
       toolbar = document.createElement("div");
       toolbar.className = "qwen-toolbar";
 
-      Object.values(ACTIONS).forEach((action) => {
-        toolbar.appendChild(createToolbarButton(action));
-      });
+      const toolbarRow = document.createElement("div");
+      toolbarRow.className = "qwen-toolbar-row";
+
+      toolbarRow.appendChild(createToolbarButton(ACTIONS.translate));
+      toolbarRow.appendChild(createTargetLanguageTrigger());
+      toolbarRow.appendChild(createToolbarButton(ACTIONS.grammar));
+      toolbarRow.appendChild(createToolbarButton(ACTIONS.settings));
+      toolbar.appendChild(toolbarRow);
+
+      if (languagePickerVisible) {
+        toolbar.appendChild(createTargetLanguagePicker());
+      }
 
       let x = rect.right + window.scrollX + 12;
       let y = rect.top + window.scrollY - 8;
@@ -1155,7 +1268,9 @@ if (
         const model = await getActiveModel();
         ({ popup: loadingPopup } = createPopup(
           action.loadingTitle(model),
-          action.loadingMessage,
+          typeof action.loadingMessage === "function"
+            ? action.loadingMessage(model)
+            : action.loadingMessage,
           { isLoading: true },
         ));
         const { payload } = await requestModel(
