@@ -106,6 +106,30 @@ function buildTranslationMessages(selection, targetLanguageCode) {
   ];
 }
 
+function resolvePressAction({ durationMs, thresholdMs }) {
+  return durationMs >= thresholdMs ? "long_press" : "click";
+}
+
+function getTargetLanguagePickerPosition({
+  anchorRect,
+  gap = 8,
+  margin = 8,
+  pickerWidth,
+  scrollX,
+  scrollY,
+  viewportWidth,
+}) {
+  const maxLeft = scrollX + viewportWidth - pickerWidth - margin;
+
+  return {
+    left: Math.max(
+      scrollX + margin,
+      Math.min(anchorRect.left + scrollX, maxLeft),
+    ),
+    top: anchorRect.bottom + scrollY + gap,
+  };
+}
+
 function formatModelOptionLabel(displayName, isActive) {
   return `${isActive ? "[x]" : "[ ]"} ${displayName}`;
 }
@@ -277,9 +301,11 @@ if (typeof module !== "undefined" && module.exports) {
     formatModelOptionLabel,
     buildTranslationMessages,
     getModelMenuLabels,
+    getTargetLanguagePickerPosition,
     getTargetLanguageToolbarLabel,
     isValidCustomModelDefinition,
     isUniqueModelKey,
+    resolvePressAction,
     resolveTargetLanguage,
     resolveRegistryActiveModel,
     resolveActiveModel,
@@ -358,6 +384,9 @@ if (
     const MODEL_OVERRIDES_STORAGE_KEY = "modelOverrides";
     const CUSTOM_MODELS_STORAGE_KEY = "customModels";
     const DEFAULT_MODEL_KEY = "GEMINI";
+    const LONG_PRESS_THRESHOLD_MS = 350;
+    const TARGET_LANGUAGE_PICKER_GAP = 8;
+    const TARGET_LANGUAGE_PICKER_MARGIN = 8;
     const modelState = createModelStateHelpers({
       storageKey: MODEL_STORAGE_KEY,
       defaultModelKey: DEFAULT_MODEL_KEY,
@@ -442,6 +471,7 @@ if (
         .qwen-small-btn {
             background: white;
             color: #666;
+            border: none;
             padding: 2px;
             border-radius: 8px;
             font-size: 14px;
@@ -456,22 +486,17 @@ if (
         .qwen-small-btn:hover {
             transform: scale(1.15);
         }
-        .qwen-target-trigger {
-            background: #f8fafc;
-            color: #334155;
-            border: 1px solid #cbd5e1;
-            border-radius: 8px;
-            padding: 2px 6px;
-            cursor: pointer;
-            font-size: 11px;
-            font-weight: 700;
-            line-height: 1.2;
-        }
         .qwen-target-picker {
-            display: flex;
+            position: absolute;
+            display: inline-flex;
             gap: 4px;
             flex-wrap: wrap;
-            padding-top: 2px;
+            padding: 6px;
+            background: #fff;
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.18);
+            z-index: 2147483647;
         }
         .qwen-target-option {
             border: 1px solid #cbd5e1;
@@ -520,9 +545,16 @@ if (
     let toolbar = null;
     let currentSelection = "";
     let currentTargetLanguage = DEFAULT_TARGET_LANGUAGE;
-    let languagePickerVisible = false;
+    let targetLanguagePicker = null;
+    let targetLanguagePickerCloseHandler = null;
+    let activeTranslatePointerId = null;
+    let translatePressStartedAt = 0;
+    let translatePressTimer = null;
+    let translateLongPressActive = false;
 
     function removeToolbar() {
+      resetTranslatePressState();
+      closeTargetLanguagePicker();
       if (!toolbar) return;
       toolbar.remove();
       toolbar = null;
@@ -542,7 +574,8 @@ if (
     }
 
     function createToolbarButton(action) {
-      const button = document.createElement("div");
+      const button = document.createElement("button");
+      button.type = "button";
       button.className = "qwen-small-btn";
       button.textContent = action.icon;
       button.addEventListener("click", (event) => {
@@ -558,16 +591,160 @@ if (
       return button;
     }
 
-    function createTargetLanguageTrigger() {
+    function clearTranslatePressTimer() {
+      if (translatePressTimer !== null) {
+        window.clearTimeout(translatePressTimer);
+        translatePressTimer = null;
+      }
+    }
+
+    function resetTranslatePressState(button) {
+      clearTranslatePressTimer();
+      if (
+        button &&
+        activeTranslatePointerId !== null &&
+        typeof button.hasPointerCapture === "function" &&
+        button.hasPointerCapture(activeTranslatePointerId)
+      ) {
+        button.releasePointerCapture(activeTranslatePointerId);
+      }
+      activeTranslatePointerId = null;
+      translatePressStartedAt = 0;
+      translateLongPressActive = false;
+    }
+
+    function closeTargetLanguagePicker() {
+      if (targetLanguagePickerCloseHandler) {
+        document.removeEventListener(
+          "mousedown",
+          targetLanguagePickerCloseHandler,
+          true,
+        );
+        targetLanguagePickerCloseHandler = null;
+      }
+
+      if (!targetLanguagePicker) {
+        return;
+      }
+
+      targetLanguagePicker.remove();
+      targetLanguagePicker = null;
+    }
+
+    function openTargetLanguagePicker(anchorElement) {
+      closeTargetLanguagePicker();
+
+      const picker = createTargetLanguagePicker();
+      picker.style.visibility = "hidden";
+      picker.style.left = "0px";
+      picker.style.top = "0px";
+      document.body.appendChild(picker);
+
+      const { left, top } = getTargetLanguagePickerPosition({
+        anchorRect: anchorElement.getBoundingClientRect(),
+        gap: TARGET_LANGUAGE_PICKER_GAP,
+        margin: TARGET_LANGUAGE_PICKER_MARGIN,
+        pickerWidth: picker.offsetWidth || 180,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        viewportWidth: window.innerWidth,
+      });
+
+      picker.style.left = `${left}px`;
+      picker.style.top = `${top}px`;
+      picker.style.visibility = "visible";
+      targetLanguagePicker = picker;
+      targetLanguagePickerCloseHandler = (event) => {
+        if (
+          picker.contains(event.target) ||
+          anchorElement.contains(event.target)
+        ) {
+          return;
+        }
+
+        closeTargetLanguagePicker();
+      };
+      document.addEventListener(
+        "mousedown",
+        targetLanguagePickerCloseHandler,
+        true,
+      );
+    }
+
+    function createTranslateButton() {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "qwen-target-trigger";
-      button.textContent = getTargetLanguageToolbarLabel(currentTargetLanguage);
-      button.addEventListener("click", (event) => {
+      button.className = "qwen-small-btn";
+      button.textContent = ACTIONS.translate.icon;
+
+      button.addEventListener("pointerdown", (event) => {
+        if (
+          !event.isPrimary ||
+          (event.pointerType === "mouse" && event.button !== 0)
+        ) {
+          return;
+        }
+
         event.stopImmediatePropagation();
-        languagePickerVisible = !languagePickerVisible;
-        showToolbar();
+        closeTargetLanguagePicker();
+        activeTranslatePointerId = event.pointerId;
+        translatePressStartedAt = Date.now();
+        translateLongPressActive = false;
+        clearTranslatePressTimer();
+        translatePressTimer = window.setTimeout(() => {
+          translateLongPressActive = true;
+          openTargetLanguagePicker(button);
+        }, LONG_PRESS_THRESHOLD_MS);
+
+        if (typeof button.setPointerCapture === "function") {
+          button.setPointerCapture(event.pointerId);
+        }
       });
+
+      button.addEventListener("pointerup", (event) => {
+        if (event.pointerId !== activeTranslatePointerId) {
+          return;
+        }
+
+        event.stopImmediatePropagation();
+        const pressAction = translateLongPressActive
+          ? "long_press"
+          : resolvePressAction({
+              durationMs: Date.now() - translatePressStartedAt,
+              thresholdMs: LONG_PRESS_THRESHOLD_MS,
+            });
+
+        resetTranslatePressState(button);
+
+        if (pressAction !== "click") {
+          return;
+        }
+
+        closeTargetLanguagePicker();
+        removeToolbar();
+        runSelectionAction(ACTIONS.translate);
+      });
+
+      button.addEventListener("pointercancel", (event) => {
+        if (event.pointerId !== activeTranslatePointerId) {
+          return;
+        }
+
+        event.stopImmediatePropagation();
+        resetTranslatePressState(button);
+      });
+
+      button.addEventListener("contextmenu", (event) => {
+        if (translateLongPressActive) {
+          event.preventDefault();
+        }
+      });
+
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      });
+
       return button;
     }
 
@@ -586,8 +763,7 @@ if (
         option.addEventListener("click", (event) => {
           event.stopImmediatePropagation();
           currentTargetLanguage = language.code;
-          languagePickerVisible = false;
-          showToolbar();
+          closeTargetLanguagePicker();
         });
         picker.appendChild(option);
       });
@@ -833,7 +1009,8 @@ if (
       if (
         !selection ||
         !selection.rangeCount ||
-        document.querySelector(".qwen-popup")
+        document.querySelector(".qwen-popup") ||
+        document.querySelector(".qwen-toolbar")
       ) {
         return;
       }
@@ -857,15 +1034,10 @@ if (
       const toolbarRow = document.createElement("div");
       toolbarRow.className = "qwen-toolbar-row";
 
-      toolbarRow.appendChild(createToolbarButton(ACTIONS.translate));
-      toolbarRow.appendChild(createTargetLanguageTrigger());
+      toolbarRow.appendChild(createTranslateButton());
       toolbarRow.appendChild(createToolbarButton(ACTIONS.grammar));
       toolbarRow.appendChild(createToolbarButton(ACTIONS.settings));
       toolbar.appendChild(toolbarRow);
-
-      if (languagePickerVisible) {
-        toolbar.appendChild(createTargetLanguagePicker());
-      }
 
       let x = rect.right + window.scrollX + 12;
       let y = rect.top + window.scrollY - 8;
@@ -1314,7 +1486,11 @@ if (
     document.addEventListener("mouseup", () => setTimeout(showToolbar, 80));
 
     document.addEventListener("mousedown", (event) => {
-      if (toolbar && !toolbar.contains(event.target)) {
+      if (
+        toolbar &&
+        !toolbar.contains(event.target) &&
+        (!targetLanguagePicker || !targetLanguagePicker.contains(event.target))
+      ) {
         removeToolbar();
       }
     });
