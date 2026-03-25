@@ -408,6 +408,7 @@ if (
     const ACTIONS = {
       translate: {
         icon: "🌐",
+        title: "Translate",
         loadingTitle: (model) => `🔄 Translating with ${model.DISPLAY_NAME}...`,
         loadingMessage: () =>
           `Translating into ${resolveTargetLanguage(currentTargetLanguage).label}...`,
@@ -420,6 +421,7 @@ if (
       },
       grammar: {
         icon: "✏️",
+        title: "Grammar",
         loadingTitle: (model) =>
           `🔄 Correcting grammar with ${model.DISPLAY_NAME}...`,
         loadingMessage:
@@ -446,6 +448,7 @@ if (
       },
       settings: {
         icon: "⚙️",
+        title: "Settings",
         run: openModelSettingsPopup,
       },
     };
@@ -1419,18 +1422,6 @@ if (
       renderEditor();
     }
 
-    async function registerModelMenuCommands() {
-      const activeModelKey = await modelState.getActiveModelKey();
-      const registry = await getResolvedModelRegistry();
-      const menuLabels = getModelMenuLabels(registry, activeModelKey);
-
-      menuLabels.forEach(({ modelKey, label }) => {
-        GM_registerMenuCommand(label, () => {
-          modelState.setActiveModelKey(modelKey);
-        });
-      });
-    }
-
     async function runSelectionAction(action) {
       if (!currentSelection) return;
 
@@ -1464,6 +1455,27 @@ if (
           model,
         );
       }
+    }
+
+    async function registerModelMenuCommands() {
+      GM_registerMenuCommand(
+        `${ACTIONS.translate.icon} ${ACTIONS.translate.title}`,
+        () => {
+          runSelectionAction(ACTIONS.translate);
+        },
+      );
+      GM_registerMenuCommand(
+        `${ACTIONS.grammar.icon} ${ACTIONS.grammar.title}`,
+        () => {
+          runSelectionAction(ACTIONS.grammar);
+        },
+      );
+      GM_registerMenuCommand(
+        `${ACTIONS.settings.icon} ${ACTIONS.settings.title}`,
+        () => {
+          ACTIONS.settings.run();
+        },
+      );
     }
 
     function showErrorPopup(message, model) {
