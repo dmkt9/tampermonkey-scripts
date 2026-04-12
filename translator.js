@@ -1495,9 +1495,13 @@ if (
       );
     }
 
-    document.addEventListener("mouseup", () => setTimeout(showToolbar, 80));
+    let timeoutID;
+    document.addEventListener("mouseup", () => {
+      timeoutID = setTimeout(showToolbar, 200);
+    });
 
     document.addEventListener("mousedown", (event) => {
+      clearTimeout(timeoutID);
       if (
         toolbar &&
         !toolbar.contains(event.target) &&
